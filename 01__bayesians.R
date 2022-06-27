@@ -9,30 +9,51 @@
 ################################################################################
 
 library( "lme4" )
-library( "merDeriv" ) # req. to determine 95% CI's for glmer random effects
+#library( "merDeriv" ) # req. to determine 95% CI's for glmer random effects
 library( "parameters" )
+library( "ggplot2" )
 
 ################################################################################
 # BEGIN FUNCTIONS
 ################################################################################
 
 ###
+# Get example data.
+##
+get_example_data <- function()
+{
+    # surgeon n=3
+    surgeon <- c("A","A","A","A","A","B","B","B","B","B","C","C","C","C","C")
+    # outcome 0/1
+    outcome <- rep( 0, length( surgeon ) )
+    outcome[1:9] <- 1
+    
+    # df
+    data <- data.frame( surgeon, outcome )
+    
+    return( data )
+}
+
+###
 # Get data.
 ##
 get_data <- function()
 {
-    # make data
-    study <- c(50,53,55,53,57,60,63,65,63,67,70,73,75,73,77)
-    mcat <- c(77,76,77,78,79,73,74,73,75,75,63,64,65,66,70)
-    classroom <- c("A","A","A","A","A","B","B","B","B","B","C","C","C","C","C")
-    tqual <- c(8,8,8,8,8,7,7,7,7,7,2,2,2,2,2)
-    mcat_bin <- rep( 0, length( mcat ) )
-    mcat_bin[1:9] <- 1
+    # get data
+    raw <- read.csv( 'data/20220627_preprocessed_df_inclsurgeon.csv' )
     
-    # df
-    prep <- data.frame( study, mcat, mcat_bin, classroom, tqual )
+    # surgeon
+    surgeon <- as.factor( raw$Surgeon_num_f )
+    levels( surgeon ) <- c( 'A', 'B', 'C' )
     
-    return( prep )
+    # binary outcome
+    outcome <- rep( 0, nrow( raw ) )
+    outcome[ raw$freedom == 'yes' ] <- 1
+    
+    # prepare data
+    data <- data.frame( surgeon, outcome ) 
+    
+    return( data )
 }
 
 ###
@@ -45,7 +66,7 @@ get_icc_rho_logistic <- function( group_var )
     resid_var <- ( pi ^ 2 ) / 3
     
     # The intraclass correlation ρ : the expected correlation between two randomly drawn units that are in the same group.
-    icc_rho <- round( group_var / ( group_var + resid_var ), 3 )
+    icc_rho <- round( group_var / ( group_var + resid_var ), 30 )
     
     return( icc_rho )
 }
@@ -59,26 +80,19 @@ outdir <- 'out.00.icc'
 dir.create( outdir, showWarnings = FALSE )
 
 # data
-data <- get_data()
+table( data <- get_example_data() )
+table( data <- get_data() )
 
-# null-model
-#randnull <- lme4::lmer( mcat ~ 1 + ( 1 | classroom ), data = prep )
-#sum <- summary( randnull )
-
-# get group variance
-#group_var <- attr( sum$varcor$classroom, 'stddev' )^2
-#resid_var <- attr( sum$varcor, 'sc' )^2
-
-# The intraclass correlation ρ : the expected correlation between two randomly drawn units that are in the same group.
-#icc_rho <- round( group_var / ( group_var + resid_var ), 3 )
+# plot data
+ggplot( data = data, aes( x = surgeon ) ) + 
+    geom_histogram( stat = 'count' ) +
+    facet_wrap( ~outcome, nrow = 2 ) 
 
 
 ## BINARY ##
 
-
 # fit generalized linear mixed model
-summary( model <- lme4::glmer( mcat_bin ~ 1 + ( 1 | classroom ), data = data, family = 'binomial' ) )
-
+summary( model <- lme4::glmer( outcome ~ 1 + ( 1 | surgeon ), data = data, family = 'binomial' ) )
 
 # fixed and random parameters with 95% CI interval computed using a Wald z-distribution approximation.
 parameters <- parameters::model_parameters( model )
@@ -95,5 +109,24 @@ icc <- data.frame( rho = get_icc_rho_logistic( group_var_mean ),
 
 
 
+library( 'brms' )
+
+# fit bayesian model
+set.seed( 123 )
+bmodel <- brms::brm( outcome ~ 1 + ( 1 | surgeon ), data = data, 
+                              family = bernoulli(),
+                              warmup = 2500, 
+                              iter   = 20000, 
+                              chains = 2 )
+
+# https://easystats.github.io/performance/index.html
+# Intraclass Correlation Coefficient
+# Adjusted ICC: 0.141
+# Unadjusted ICC: 0.141
+performance::icc( bmodel )
+
+## Variances of Posterior Predicted Distribution
+# Conditioned on rand. effects: 0.17  Credible Interval (CI) 95%: [0.09-0.23]
+performance::variance_decomposition( bmodel )
 
 
